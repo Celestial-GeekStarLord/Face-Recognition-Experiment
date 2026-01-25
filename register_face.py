@@ -5,7 +5,7 @@ from facenet_pytorch import MTCNN, InceptionResnetV1
 from PIL import Image
 import torchvision.transforms as transforms
 
-NAME = "Nate"   # 👈 your name here
+NAME = "Shiv"   # 👈 your name here
 DB_FILE = "face_db.pkl"
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
