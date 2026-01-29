@@ -10,37 +10,52 @@ import time
 import threading
 
 # =========================
-# VOICE ENGINE (THREAD-SAFE)
+# IMPROVED VOICE ENGINE
 # =========================
 class VoiceAnnouncer:
     def __init__(self):
-        self.engine = pyttsx3.init()
-        self.engine.setProperty('rate', 160)
-        self.engine.setProperty('volume', 1.0)
-        self.queue = []
         self.lock = threading.Lock()
         self.running = True
+        self.current_announcement = None
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
     
     def _worker(self):
+        """Worker thread that handles TTS announcements"""
         while self.running:
+            announcement = None
             with self.lock:
-                if self.queue:
-                    name = self.queue.pop(0)
-                    print(f"🔊 Announcing: {name}")
-                    self.engine.say(name)
-                    self.engine.runAndWait()
+                if self.current_announcement:
+                    announcement = self.current_announcement
+                    self.current_announcement = None
+            
+            if announcement:
+                try:
+                    # Create fresh engine for each announcement
+                    engine = pyttsx3.init()
+                    engine.setProperty('rate', 160)
+                    engine.setProperty('volume', 1.0)
+                    print(f"🔊 Speaking: {announcement}")
+                    engine.say(announcement)
+                    engine.runAndWait()
+                    engine.stop()
+                    del engine
+                    print(f"✅ Finished speaking: {announcement}")
+                except Exception as e:
+                    print(f"❌ TTS Error: {e}")
+            
             time.sleep(0.1)
     
     def announce(self, name):
+        """Queue a name to be announced"""
         with self.lock:
-            if name not in self.queue:
-                self.queue.append(name)
+            # Replace current announcement (don't queue duplicates)
+            self.current_announcement = name
+            print(f"📢 Queued: {name}")
     
     def stop(self):
         self.running = False
-        self.thread.join(timeout=2)
+        self.thread.join(timeout=3)
 
 # =========================
 # CONFIG
@@ -48,8 +63,8 @@ class VoiceAnnouncer:
 DB_FILE = "face_db.pkl" 
 THRESHOLD = 0.6
 CAMERA_INDEX = 0
-COOLDOWN_SECONDS = 3  # Minimum time between announcements of same person
-ABSENCE_FRAMES = 15  # Number of consecutive frames person must be absent
+COOLDOWN_SECONDS = 2  # Minimum time between announcements
+ABSENCE_FRAMES = 20  # Frames to wait before marking as absent (~0.7 seconds)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -76,6 +91,8 @@ try:
     with open(DB_FILE, "rb") as f:
         face_db = pickle.load(f)
     print(f"📦 Loaded {len(face_db)} registered people")
+    for name in face_db.keys():
+        print(f"   - {name}")
 except FileNotFoundError:
     print(f"❌ Database file '{DB_FILE}' not found. Please register faces first.")
     exit(1)
@@ -84,16 +101,14 @@ except FileNotFoundError:
 # INITIALIZE VOICE
 # =========================
 announcer = VoiceAnnouncer()
+time.sleep(0.5)  # Give TTS engine time to initialize
 
 # =========================
 # TRACKING STATE
 # =========================
-# Track when each person was last announced
-last_announcement_time = {}
-# Track if person is currently present
-person_present = {}
-# Track consecutive frames person has been absent
-absence_counter = {}
+last_announcement_time = {}  # When person was last announced
+person_present = {}  # Is person currently detected
+absence_counter = {}  # Count frames of absence
 
 # =========================
 # CAMERA
@@ -102,13 +117,14 @@ cap = cv2.VideoCapture(CAMERA_INDEX)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+cap.set(cv2.CAP_PROP_FPS, 30)
 
 if not cap.isOpened():
     print("❌ Failed to open camera")
     exit(1)
 
-print("🧠 Face recognition started | Press Q to quit")
-print(f"⚙️ Settings: Cooldown={COOLDOWN_SECONDS}s, Absence={ABSENCE_FRAMES} frames")
+print("\n🧠 Face recognition started | Press Q to quit")
+print(f"⚙️ Cooldown: {COOLDOWN_SECONDS}s | Absence threshold: {ABSENCE_FRAMES} frames\n")
 
 frame_count = 0
 
@@ -116,14 +132,14 @@ try:
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("⚠️ Failed to grab frame, retrying...")
+            print("⚠️ Failed to grab frame")
             time.sleep(0.1)
             continue
         
         frame_count += 1
         current_time = time.time()
         
-        # Process every frame for detection
+        # Convert frame for detection
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb)
         
@@ -135,28 +151,30 @@ try:
         
         detected_names_this_frame = set()
         
+        # =========================
+        # FACE DETECTION & RECOGNITION
+        # =========================
         if boxes is not None and probs is not None:
             for box, prob in zip(boxes, probs):
                 if prob < 0.9:
                     continue
                 
                 x1, y1, x2, y2 = map(int, box)
-                
-                # Ensure coordinates are within frame bounds
-                x1 = max(0, x1)
-                y1 = max(0, y1)
+                x1, y1 = max(0, x1), max(0, y1)
                 x2 = min(frame.shape[1], x2)
                 y2 = min(frame.shape[0], y2)
                 
                 if x2 <= x1 or y2 <= y1:
                     continue
                 
+                # Extract and process face
                 face_img = pil_img.crop((x1, y1, x2, y2))
                 face_tensor = preprocess(face_img).unsqueeze(0).to(device)
                 
                 with torch.no_grad():
                     emb = resnet(face_tensor)
                 
+                # Match against database
                 name = "Unknown"
                 best_score = 0.0
                 
@@ -173,11 +191,11 @@ try:
                 if best_score < THRESHOLD:
                     name = "Unknown"
                 
-                # Track detected names
+                # Track detection
                 if name != "Unknown":
                     detected_names_this_frame.add(name)
                 
-                # Draw
+                # Draw bounding box
                 color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(
@@ -185,78 +203,63 @@ try:
                     f"{name} ({best_score:.2f})",
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
+                    0.7,
                     color,
                     2
                 )
         
         # =========================
-        # 🔊 IMPROVED ANNOUNCEMENT LOGIC
+        # PRESENCE TRACKING & ANNOUNCEMENTS
         # =========================
-        
-        # Get all registered people
         all_known_people = set(face_db.keys())
         
-        # Update presence tracking for all known people
         for person in all_known_people:
             if person in detected_names_this_frame:
-                # Person is detected in this frame
-                was_absent_before = not person_present.get(person, False)
+                # Person detected
+                was_absent = not person_present.get(person, False)
                 person_present[person] = True
                 absence_counter[person] = 0
                 
-                # Check if we should announce
+                # Check if should announce
                 last_announced = last_announcement_time.get(person, 0)
-                time_since_announcement = current_time - last_announced
+                time_since_last = current_time - last_announced
                 
-                # Announce if:
-                # 1. Never announced before (first detection ever), OR
-                # 2. Person was absent and just returned (re-entry)
                 should_announce = (
-                    last_announced == 0 or 
-                    (was_absent_before and time_since_announcement >= COOLDOWN_SECONDS)
+                    last_announced == 0 or  # Never announced
+                    (was_absent and time_since_last >= COOLDOWN_SECONDS)  # Returned after absence
                 )
                 
                 if should_announce:
                     announcer.announce(person)
                     last_announcement_time[person] = current_time
-                    print(f"✅ Queued announcement for {person} (return: {was_absent_before})")
+                    status = "FIRST TIME" if last_announced == 0 else "RETURNED"
+                    print(f"🎯 {person} detected ({status}) - Announcing...")
                     
             else:
-                # Person NOT detected in this frame
-                if person in person_present and person_present[person]:
-                    # Increment absence counter
+                # Person NOT detected
+                if person_present.get(person, False):
                     absence_counter[person] = absence_counter.get(person, 0) + 1
                     
-                    # Mark as absent if threshold reached
                     if absence_counter[person] >= ABSENCE_FRAMES:
                         person_present[person] = False
-                        print(f"👋 {person} has left the frame")
+                        print(f"👋 {person} left the frame (absent {ABSENCE_FRAMES} frames)")
         
-        # Display status
-        status_y = 30
+        # =========================
+        # DISPLAY INFO
+        # =========================
+        status_text = f"Frame: {frame_count}"
+        if detected_names_this_frame:
+            status_text += f" | Present: {', '.join(detected_names_this_frame)}"
+        
         cv2.putText(
             frame,
-            f"Frame: {frame_count}",
-            (10, status_y),
+            status_text,
+            (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
             (255, 255, 255),
             2
         )
-        
-        # Show who's present
-        if detected_names_this_frame:
-            status_y += 25
-            cv2.putText(
-                frame,
-                f"Present: {', '.join(detected_names_this_frame)}",
-                (10, status_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
-            )
         
         cv2.imshow("Face Recognition", frame)
         
