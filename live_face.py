@@ -48,8 +48,8 @@ class VoiceAnnouncer:
 DB_FILE = "face_db.pkl" 
 THRESHOLD = 0.6
 CAMERA_INDEX = 0
-COOLDOWN_SECONDS = 3  # Cooldown after announcement
-ABSENCE_THRESHOLD = 2.0  # How long person must be gone before re-announcing
+COOLDOWN_SECONDS = 3  # Minimum time between announcements of same person
+ABSENCE_FRAMES = 15  # Number of consecutive frames person must be absent
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -88,16 +88,18 @@ announcer = VoiceAnnouncer()
 # =========================
 # TRACKING STATE
 # =========================
-# Track when each person was last SEEN (not announced)
-last_seen_time = {}
-# Track when each person was last ANNOUNCED
+# Track when each person was last announced
 last_announcement_time = {}
+# Track if person is currently present
+person_present = {}
+# Track consecutive frames person has been absent
+absence_counter = {}
 
 # =========================
 # CAMERA
 # =========================
 cap = cv2.VideoCapture(CAMERA_INDEX)
-cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce lag
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
@@ -106,6 +108,7 @@ if not cap.isOpened():
     exit(1)
 
 print("🧠 Face recognition started | Press Q to quit")
+print(f"⚙️ Settings: Cooldown={COOLDOWN_SECONDS}s, Absence={ABSENCE_FRAMES} frames")
 
 frame_count = 0
 
@@ -170,10 +173,9 @@ try:
                 if best_score < THRESHOLD:
                     name = "Unknown"
                 
-                # Update last seen time for known people
+                # Track detected names
                 if name != "Unknown":
                     detected_names_this_frame.add(name)
-                    last_seen_time[name] = current_time
                 
                 # Draw
                 color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
@@ -189,41 +191,72 @@ try:
                 )
         
         # =========================
-        # 🔊 VOICE ANNOUNCEMENT LOGIC
+        # 🔊 IMPROVED ANNOUNCEMENT LOGIC
         # =========================
-        # For each detected person, check if we should announce
-        for name in detected_names_this_frame:
-            last_announced = last_announcement_time.get(name, 0)
-            time_since_announcement = current_time - last_announced
-            
-            # Check if person was absent (not seen for ABSENCE_THRESHOLD seconds)
-            # This allows re-announcement when they return
-            was_absent = (name not in last_seen_time or 
-                         (current_time - last_seen_time[name]) > ABSENCE_THRESHOLD)
-            
-            # Announce if:
-            # 1. Never announced before, OR
-            # 2. Cooldown has passed AND person was absent
-            should_announce = (
-                last_announced == 0 or 
-                (time_since_announcement >= COOLDOWN_SECONDS and was_absent)
-            )
-            
-            if should_announce:
-                announcer.announce(name)
-                last_announcement_time[name] = current_time
-                print(f"✅ Queued announcement for {name}")
         
-        # Display FPS
+        # Get all registered people
+        all_known_people = set(face_db.keys())
+        
+        # Update presence tracking for all known people
+        for person in all_known_people:
+            if person in detected_names_this_frame:
+                # Person is detected in this frame
+                was_absent_before = not person_present.get(person, False)
+                person_present[person] = True
+                absence_counter[person] = 0
+                
+                # Check if we should announce
+                last_announced = last_announcement_time.get(person, 0)
+                time_since_announcement = current_time - last_announced
+                
+                # Announce if:
+                # 1. Never announced before (first detection ever), OR
+                # 2. Person was absent and just returned (re-entry)
+                should_announce = (
+                    last_announced == 0 or 
+                    (was_absent_before and time_since_announcement >= COOLDOWN_SECONDS)
+                )
+                
+                if should_announce:
+                    announcer.announce(person)
+                    last_announcement_time[person] = current_time
+                    print(f"✅ Queued announcement for {person} (return: {was_absent_before})")
+                    
+            else:
+                # Person NOT detected in this frame
+                if person in person_present and person_present[person]:
+                    # Increment absence counter
+                    absence_counter[person] = absence_counter.get(person, 0) + 1
+                    
+                    # Mark as absent if threshold reached
+                    if absence_counter[person] >= ABSENCE_FRAMES:
+                        person_present[person] = False
+                        print(f"👋 {person} has left the frame")
+        
+        # Display status
+        status_y = 30
         cv2.putText(
             frame,
             f"Frame: {frame_count}",
-            (10, 30),
+            (10, status_y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
+            0.6,
             (255, 255, 255),
             2
         )
+        
+        # Show who's present
+        if detected_names_this_frame:
+            status_y += 25
+            cv2.putText(
+                frame,
+                f"Present: {', '.join(detected_names_this_frame)}",
+                (10, status_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2
+            )
         
         cv2.imshow("Face Recognition", frame)
         
@@ -235,6 +268,8 @@ except KeyboardInterrupt:
     print("\n👋 Interrupted by user")
 except Exception as e:
     print(f"\n❌ Unexpected error: {e}")
+    import traceback
+    traceback.print_exc()
 finally:
     print("🧹 Cleaning up...")
     cap.release()
