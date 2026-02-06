@@ -6,18 +6,18 @@ from facenet_pytorch import MTCNN, InceptionResnetV1
 from PIL import Image
 import numpy as np
 
-# =========================
+
 # CONFIG
-# =========================
+
 NAME = "Samir Joshi"  # Change name when registering a new person
 DB_FILE = "face_db.pkl"
 CAMERA_INDEX = 0
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# =========================
+
 # MODELS
-# =========================
+
 mtcnn = MTCNN(
     keep_all=True,
     device=device,
@@ -27,9 +27,9 @@ mtcnn = MTCNN(
 
 resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
 
-# =========================
+
 # LOAD OR CREATE DATABASE
-# =========================
+
 if os.path.exists(DB_FILE):
     with open(DB_FILE, "rb") as f:
         face_db = pickle.load(f)
@@ -39,11 +39,11 @@ else:
 if NAME not in face_db:
     face_db[NAME] = []
 
-# =========================
+#
 # CAMERA
-# =========================
+
 cap = cv2.VideoCapture(CAMERA_INDEX)
-cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to prevent lag
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  
 print("📸 Look at the camera")
 print("👉 Press S to save face")
 print("👉 Press Q to quit")
@@ -57,7 +57,7 @@ while True:
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb)
 
-    # DETECT FACES
+    
     boxes, probs = mtcnn.detect(pil_img)
     faces = mtcnn(pil_img)
 
@@ -79,7 +79,7 @@ while True:
 
     key = cv2.waitKey(1) & 0xFF
 
-    # SAVE FACE
+    
     if key == ord('s') and faces is not None:
         for face in faces:
             face = face.unsqueeze(0).to(device)
