@@ -9,7 +9,7 @@ import numpy as np
 # =========================
 # CONFIG
 # =========================
-NAME = "Nabin Joshi"  # Change name when registering a new person
+NAME = "Samir Joshi"  # Change name when registering a new person
 DB_FILE = "face_db.pkl"
 CAMERA_INDEX = 0
 
