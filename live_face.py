@@ -236,9 +236,7 @@ try:
             if debug_counter % 30 == 0:
                 print(f"Frame {frame_count}: No faces detected")
         
-        # =========================
-        # PRESENCE TRACKING & ANNOUNCEMENTS
-        # =========================
+    
         all_known_people = set(face_db.keys())
         
         for person in all_known_people:
