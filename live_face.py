@@ -31,7 +31,6 @@ class VoiceAnnouncer:
             
             if announcement:
                 try:
-                    # Create fresh engine for each announcement
                     engine = pyttsx3.init()
                     engine.setProperty('rate', 160)
                     engine.setProperty('volume', 1.0)
@@ -49,7 +48,6 @@ class VoiceAnnouncer:
     def announce(self, name):
         """Queue a name to be announced"""
         with self.lock:
-            # Replace current announcement (don't queue duplicates)
             self.current_announcement = name
             print(f"📢 Queued: {name}")
     
@@ -57,20 +55,18 @@ class VoiceAnnouncer:
         self.running = False
         self.thread.join(timeout=3)
 
-# =========================
+
 # CONFIG
-# =========================
 DB_FILE = "face_db.pkl" 
-THRESHOLD = 0.6
+THRESHOLD = 0.4
 CAMERA_INDEX = 0
-COOLDOWN_SECONDS = 2  # Minimum time between announcements
-ABSENCE_FRAMES = 20  # Frames to wait before marking as absent (~0.7 seconds)
+COOLDOWN_SECONDS = 2
+ABSENCE_FRAMES = 20
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"🖥️ Using device: {device}")
 
-# =========================
 # MODELS
-# =========================
 mtcnn = MTCNN(
     keep_all=True, 
     device=device,
@@ -90,9 +86,12 @@ preprocess = transforms.Compose([
 try:
     with open(DB_FILE, "rb") as f:
         face_db = pickle.load(f)
-    print(f"📦 Loaded {len(face_db)} registered people")
-    for name in face_db.keys():
-        print(f"   - {name}")
+    print(f"\n📦 Loaded {len(face_db)} registered people:")
+    for name, embeddings in face_db.items():
+        print(f"   - {name}: {len(embeddings)} embedding(s)")
+        # Check embedding shape
+        if embeddings:
+            print(f"     Shape: {embeddings[0].shape}, Device: {embeddings[0].device}")
 except FileNotFoundError:
     print(f"❌ Database file '{DB_FILE}' not found. Please register faces first.")
     exit(1)
@@ -101,14 +100,14 @@ except FileNotFoundError:
 # INITIALIZE VOICE
 # =========================
 announcer = VoiceAnnouncer()
-time.sleep(0.5)  # Give TTS engine time to initialize
+time.sleep(0.5)
 
 # =========================
 # TRACKING STATE
 # =========================
-last_announcement_time = {}  # When person was last announced
-person_present = {}  # Is person currently detected
-absence_counter = {}  # Count frames of absence
+last_announcement_time = {}
+person_present = {}
+absence_counter = {}
 
 # =========================
 # CAMERA
@@ -124,9 +123,10 @@ if not cap.isOpened():
     exit(1)
 
 print("\n🧠 Face recognition started | Press Q to quit")
-print(f"⚙️ Cooldown: {COOLDOWN_SECONDS}s | Absence threshold: {ABSENCE_FRAMES} frames\n")
+print(f"⚙️ Threshold: {THRESHOLD} | Cooldown: {COOLDOWN_SECONDS}s | Absence: {ABSENCE_FRAMES} frames\n")
 
 frame_count = 0
+debug_counter = 0  # Only print debug info every N frames
 
 try:
     while True:
@@ -137,6 +137,7 @@ try:
             continue
         
         frame_count += 1
+        debug_counter += 1
         current_time = time.time()
         
         # Convert frame for detection
@@ -155,8 +156,16 @@ try:
         # FACE DETECTION & RECOGNITION
         # =========================
         if boxes is not None and probs is not None:
+            # Debug: Show detection info every 30 frames
+            if debug_counter % 30 == 0:
+                print(f"\n🔍 Frame {frame_count}: Detected {len(boxes)} face(s)")
+                for i, (box, prob) in enumerate(zip(boxes, probs)):
+                    print(f"   Face {i+1}: confidence = {prob:.3f}")
+            
             for box, prob in zip(boxes, probs):
                 if prob < 0.9:
+                    if debug_counter % 30 == 0:
+                        print(f"   ⚠️ Skipping face (prob {prob:.3f} < 0.9)")
                     continue
                 
                 x1, y1, x2, y2 = map(int, box)
@@ -174,22 +183,38 @@ try:
                 with torch.no_grad():
                     emb = resnet(face_tensor)
                 
-                # Match against database
+                # Match against database - WITH DETAILED LOGGING
                 name = "Unknown"
                 best_score = 0.0
+                best_match_name = None
+                all_scores = {}
                 
                 for known_name, emb_list in face_db.items():
+                    max_score_for_person = 0.0
                     for known_emb in emb_list:
                         score = F.cosine_similarity(
                             emb,
                             known_emb.to(device)
                         ).item()
-                        if score > best_score:
-                            best_score = score
-                            name = known_name
+                        max_score_for_person = max(max_score_for_person, score)
+                    
+                    all_scores[known_name] = max_score_for_person
+                    if max_score_for_person > best_score:
+                        best_score = max_score_for_person
+                        best_match_name = known_name
                 
-                if best_score < THRESHOLD:
-                    name = "Unknown"
+                # ALWAYS print scores (this is the key diagnostic!)
+                print(f"\n📊 Recognition scores:")
+                for person, score in sorted(all_scores.items(), key=lambda x: x[1], reverse=True):
+                    marker = "✅" if score >= THRESHOLD else "❌"
+                    print(f"   {marker} {person}: {score:.4f}")
+                print(f"   Best: {best_match_name} ({best_score:.4f}) | Threshold: {THRESHOLD}")
+                
+                if best_score >= THRESHOLD:
+                    name = best_match_name
+                    print(f"   ✅ RECOGNIZED as {name}")
+                else:
+                    print(f"   ❌ UNKNOWN (best score {best_score:.4f} < {THRESHOLD})")
                 
                 # Track detection
                 if name != "Unknown":
@@ -207,6 +232,9 @@ try:
                     color,
                     2
                 )
+        else:
+            if debug_counter % 30 == 0:
+                print(f"Frame {frame_count}: No faces detected")
         
         # =========================
         # PRESENCE TRACKING & ANNOUNCEMENTS
@@ -215,18 +243,16 @@ try:
         
         for person in all_known_people:
             if person in detected_names_this_frame:
-                # Person detected
                 was_absent = not person_present.get(person, False)
                 person_present[person] = True
                 absence_counter[person] = 0
                 
-                # Check if should announce
                 last_announced = last_announcement_time.get(person, 0)
                 time_since_last = current_time - last_announced
                 
                 should_announce = (
-                    last_announced == 0 or  # Never announced
-                    (was_absent and time_since_last >= COOLDOWN_SECONDS)  # Returned after absence
+                    last_announced == 0 or
+                    (was_absent and time_since_last >= COOLDOWN_SECONDS)
                 )
                 
                 if should_announce:
@@ -236,7 +262,6 @@ try:
                     print(f"🎯 {person} detected ({status}) - Announcing...")
                     
             else:
-                # Person NOT detected
                 if person_present.get(person, False):
                     absence_counter[person] = absence_counter.get(person, 0) + 1
                     
