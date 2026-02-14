@@ -9,9 +9,9 @@ import pyttsx3
 import time
 import threading
 
-# =========================
+
 # IMPROVED VOICE ENGINE
-# =========================
+
 class VoiceAnnouncer:
     def __init__(self):
         self.lock = threading.Lock()
@@ -80,9 +80,9 @@ preprocess = transforms.Compose([
     transforms.Normalize([0.5]*3, [0.5]*3)
 ])
 
-# =========================
+
 # LOAD DATABASE
-# =========================
+
 try:
     with open(DB_FILE, "rb") as f:
         face_db = pickle.load(f)
@@ -96,22 +96,22 @@ except FileNotFoundError:
     print(f"❌ Database file '{DB_FILE}' not found. Please register faces first.")
     exit(1)
 
-# =========================
+
 # INITIALIZE VOICE
-# =========================
+
 announcer = VoiceAnnouncer()
 time.sleep(0.5)
 
-# =========================
+
 # TRACKING STATE
-# =========================
+
 last_announcement_time = {}
 person_present = {}
 absence_counter = {}
 
-# =========================
+
 # CAMERA
-# =========================
+
 cap = cv2.VideoCapture(CAMERA_INDEX)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -152,9 +152,9 @@ try:
         
         detected_names_this_frame = set()
         
-        # =========================
+        
         # FACE DETECTION & RECOGNITION
-        # =========================
+        
         if boxes is not None and probs is not None:
             # Debug: Show detection info every 30 frames
             if debug_counter % 30 == 0:
@@ -267,9 +267,9 @@ try:
                         person_present[person] = False
                         print(f"👋 {person} left the frame (absent {ABSENCE_FRAMES} frames)")
         
-        # =========================
+        
         # DISPLAY INFO
-        # =========================
+        
         status_text = f"Frame: {frame_count}"
         if detected_names_this_frame:
             status_text += f" | Present: {', '.join(detected_names_this_frame)}"
