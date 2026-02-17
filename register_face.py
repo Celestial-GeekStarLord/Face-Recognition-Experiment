@@ -7,7 +7,7 @@ from PIL import Image
 import torchvision.transforms as transforms
 
 # CONFIG
-NAME = "Samir Joshi"  
+NAME = "Name"  
 DB_FILE = "face_db.pkl"
 CAMERA_INDEX = 0
 

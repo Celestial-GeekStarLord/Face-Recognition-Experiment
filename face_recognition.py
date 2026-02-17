@@ -4,15 +4,15 @@ import cv2
 from PIL import Image
 import numpy as np
 
-# -----------------------------
+
 # Device
-# -----------------------------
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Using device:", device)
 
-# -----------------------------
+
 # Load Models (PRETRAINED)
-# -----------------------------
+
 mtcnn = MTCNN(
     image_size=160,
     margin=20,
@@ -27,9 +27,9 @@ resnet = InceptionResnetV1(
     pretrained='vggface2'
 ).eval().to(device)
 
-# -----------------------------
+
 # Load Image
-# -----------------------------
+
 img_path = "test.jpg"   # <-- put your image here
 img = Image.open(img_path).convert('RGB')
 
